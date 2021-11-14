@@ -10,9 +10,14 @@ from torchvision import datasets, transforms, utils
 
 from tqdm import tqdm
 
+from audio_data import AudioData
 from vqvae import VQVAE
 from scheduler import CycleScheduler
 import distributed as dist
+import matplotlib.pyplot as plt
+import librosa.display
+from torchaudio.transforms import MuLawDecoding
+import soundfile as sf
 
 
 def train(epoch, loader, model, optimizer, scheduler, device):
@@ -22,12 +27,12 @@ def train(epoch, loader, model, optimizer, scheduler, device):
     criterion = nn.MSELoss()
 
     latent_loss_weight = 0.25
-    sample_size = 25
+    sample_size = 1
 
     mse_sum = 0
     mse_n = 0
 
-    for i, (img, label) in enumerate(loader):
+    for i, img in enumerate(loader):
         model.zero_grad()
 
         img = img.to(device)
@@ -70,13 +75,25 @@ def train(epoch, loader, model, optimizer, scheduler, device):
                 with torch.no_grad():
                     out, _ = model(sample)
 
-                utils.save_image(
-                    torch.cat([sample, out], 0),
-                    f"sample/{str(epoch + 1).zfill(5)}_{str(i).zfill(5)}.png",
-                    nrow=sample_size,
-                    normalize=True,
-                    range=(-1, 1),
-                )
+                sample = MuLawDecoding(256)(sample.view(-1))
+                out = MuLawDecoding(256)(out.view(-1))
+
+                path = f"sample/{str(epoch + 1).zfill(5)}_{str(i).zfill(5)}_sample.wav"
+                sf.write(path, sample.cpu().numpy(), 16000)
+                path = f"sample/{str(epoch + 1).zfill(5)}_{str(i).zfill(5)}_out.wav"
+                sf.write(path, out.cpu().numpy(), 16000)
+
+                plt.figure(figsize=(16, 6))
+                p = plt.subplot(2, 1, 1)
+                p.set_ylim(-0.5, 0.5)
+                librosa.display.waveplot(sample.cpu().numpy(), sr=16000)
+                p = plt.subplot(2, 1, 2)
+                p.set_ylim(-0.5, 0.5)
+                librosa.display.waveplot(out.cpu().numpy(), sr=16000)
+                plt.tight_layout()
+                path = f"sample/{str(epoch + 1).zfill(5)}_{str(i).zfill(5)}.png"
+                plt.savefig(path, format="png")
+                plt.close()
 
                 model.train()
 
@@ -95,10 +112,10 @@ def main(args):
         ]
     )
 
-    dataset = datasets.ImageFolder(args.path, transform=transform)
+    dataset = AudioData('/groups/1/gcc50521/furukawa/maestro_npy_10sec')
     sampler = dist.data_sampler(dataset, shuffle=True, distributed=args.distributed)
     loader = DataLoader(
-        dataset, batch_size=128 // args.n_gpu, sampler=sampler, num_workers=2
+        dataset, batch_size=128, sampler=sampler, num_workers=2
     )
 
     model = VQVAE().to(device)
@@ -124,7 +141,7 @@ def main(args):
     for i in range(args.epoch):
         train(i, loader, model, optimizer, scheduler, device)
 
-        if dist.is_primary():
+        if dist.is_primary() and (i + 1) % 20 == 0:
             torch.save(model.state_dict(), f"checkpoint/vqvae_{str(i + 1).zfill(3)}.pt")
 
 
@@ -133,9 +150,9 @@ if __name__ == "__main__":
     parser.add_argument("--n_gpu", type=int, default=1)
 
     port = (
-        2 ** 15
-        + 2 ** 14
-        + hash(os.getuid() if sys.platform != "win32" else 1) % 2 ** 14
+            2 ** 15
+            + 2 ** 14
+            + hash(os.getuid() if sys.platform != "win32" else 1) % 2 ** 14
     )
     parser.add_argument("--dist_url", default=f"tcp://127.0.0.1:{port}")
 
@@ -143,7 +160,7 @@ if __name__ == "__main__":
     parser.add_argument("--epoch", type=int, default=560)
     parser.add_argument("--lr", type=float, default=3e-4)
     parser.add_argument("--sched", type=str)
-    parser.add_argument("path", type=str)
+    parser.add_argument("--path", type=str)
 
     args = parser.parse_args()
 
