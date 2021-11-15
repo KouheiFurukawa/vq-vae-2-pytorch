@@ -20,7 +20,7 @@ from torchaudio.transforms import MuLawDecoding
 import soundfile as sf
 
 
-def train(epoch, loader, model, optimizer, scheduler, device):
+def train(epoch, loader, model, optimizer, scheduler, device, tag):
     if dist.is_primary():
         loader = tqdm(loader)
 
@@ -78,9 +78,9 @@ def train(epoch, loader, model, optimizer, scheduler, device):
                 sample = MuLawDecoding(256)(sample.view(-1))
                 out = MuLawDecoding(256)(out.view(-1))
 
-                path = f"sample/{str(epoch + 1).zfill(5)}_{str(i).zfill(5)}_sample.wav"
+                path = f"sample/{tag}/{str(epoch + 1).zfill(5)}_{str(i).zfill(5)}_sample.wav"
                 sf.write(path, sample.cpu().numpy(), 16000)
-                path = f"sample/{str(epoch + 1).zfill(5)}_{str(i).zfill(5)}_out.wav"
+                path = f"sample/{tag}/{str(epoch + 1).zfill(5)}_{str(i).zfill(5)}_out.wav"
                 sf.write(path, out.cpu().numpy(), 16000)
 
                 plt.figure(figsize=(16, 6))
@@ -91,7 +91,7 @@ def train(epoch, loader, model, optimizer, scheduler, device):
                 p.set_ylim(-0.5, 0.5)
                 librosa.display.waveplot(out.cpu().numpy(), sr=16000)
                 plt.tight_layout()
-                path = f"sample/{str(epoch + 1).zfill(5)}_{str(i).zfill(5)}.png"
+                path = f"sample/{tag}/{str(epoch + 1).zfill(5)}_{str(i).zfill(5)}.png"
                 plt.savefig(path, format="png")
                 plt.close()
 
@@ -112,11 +112,13 @@ def main(args):
         ]
     )
 
-    dataset = AudioData('/groups/1/gcc50521/furukawa/maestro_npy_10sec')
+    dataset = AudioData('/groups/1/gcc50521/furukawa/musicnet_npy_10sec')
     sampler = dist.data_sampler(dataset, shuffle=True, distributed=args.distributed)
     loader = DataLoader(
         dataset, batch_size=128, sampler=sampler, num_workers=2
     )
+    os.makedirs(f"sample/{args.tag}/", exist_ok=True)
+    os.makedirs(f"checkpoint/{args.tag}/", exist_ok=True)
 
     model = VQVAE().to(device)
 
@@ -139,10 +141,10 @@ def main(args):
         )
 
     for i in range(args.epoch):
-        train(i, loader, model, optimizer, scheduler, device)
+        train(i, loader, model, optimizer, scheduler, device, args.tag)
 
         if dist.is_primary() and (i + 1) % 20 == 0:
-            torch.save(model.state_dict(), f"checkpoint/vqvae_{str(i + 1).zfill(3)}.pt")
+            torch.save(model.state_dict(), f"checkpoint/{args.tag}/vqvae_{str(i + 1).zfill(3)}.pt")
 
 
 if __name__ == "__main__":
@@ -161,6 +163,7 @@ if __name__ == "__main__":
     parser.add_argument("--lr", type=float, default=3e-4)
     parser.add_argument("--sched", type=str)
     parser.add_argument("--path", type=str)
+    parser.add_argument("tag", type=str)
 
     args = parser.parse_args()
 
