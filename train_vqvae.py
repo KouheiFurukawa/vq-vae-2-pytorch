@@ -100,33 +100,37 @@ def train(epoch, loader, model, optimizer, scheduler, device, tag):
 
 def test(epoch, loader, model, optimizer, scheduler, device, tag):
     ckpt = torch.load(os.path.join('checkpoint', 'musicnet/vqvae_160.pt'))
-    model.load_state_dict({k[7:]: v for k, v in ckpt.items()})
+    model.load_state_dict(ckpt)
     model.eval()
     if dist.is_primary():
-        loader = tqdm(loader)
-    for i, (anc, _, neg) in enumerate(loader):
-        anc, neg = anc.to(device), neg.to(device)
-        with torch.no_grad():
-            vq_t_a, vq_b_a, _, _, _ = model.encode(anc)
-            vq_t_n, vq_b_n, _, _, _ = model.encode(neg)
-            recons_a = model.decode(vq_t_a, vq_b_a)[:1].view(-1)
-            recons_n = model.decode(vq_t_n, vq_b_n)[:1].view(-1)
-            swap1 = model.decode(vq_t_a, vq_b_n)[:1].view(-1)
-            swap2 = model.decode(vq_t_a, vq_b_a)[:1].view(-1)
-            recons_a = MuLawDecoding(256)(recons_a)
-            recons_n = MuLawDecoding(256)(recons_n)
-            swap1 = MuLawDecoding(256)(swap1)
-            swap2 = MuLawDecoding(256)(swap2)
-        os.makedirs(f"gen/{tag}/", exist_ok=True)
-        path = f"gen/{tag}/{str(epoch + 1).zfill(5)}_{str(i).zfill(5)}_recons_a.wav"
-        sf.write(path, recons_a.cpu().numpy(), 16000)
-        path = f"gen/{tag}/{str(epoch + 1).zfill(5)}_{str(i).zfill(5)}_recons_n.wav"
-        sf.write(path, recons_n.cpu().numpy(), 16000)
-        path = f"gen/{tag}/{str(epoch + 1).zfill(5)}_{str(i).zfill(5)}_swap1.wav"
-        sf.write(path, swap1.cpu().numpy(), 16000)
-        path = f"gen/{tag}/{str(epoch + 1).zfill(5)}_{str(i).zfill(5)}_swap2.wav"
-        sf.write(path, swap2.cpu().numpy(), 16000)
-        break
+        loader = loader.__iter__()
+    anc, neg = loader.next()[:1].to(device), loader.next()[:1].to(device)
+    with torch.no_grad():
+        vq_t_a, vq_b_a, _, _, _ = model.encode(anc)
+        vq_t_n, vq_b_n, _, _, _ = model.encode(neg)
+        recons_a = model.decode(vq_t_a, vq_b_a)[:1].view(-1)
+        recons_n = model.decode(vq_t_n, vq_b_n)[:1].view(-1)
+        swap1 = model.decode(vq_t_a, vq_b_n)[:1].view(-1)
+        swap2 = model.decode(vq_t_a, vq_b_a)[:1].view(-1)
+        recons_a = MuLawDecoding(256)(recons_a)
+        recons_n = MuLawDecoding(256)(recons_n)
+        swap1 = MuLawDecoding(256)(swap1)
+        swap2 = MuLawDecoding(256)(swap2)
+        gt_a = MuLawDecoding(256)(anc.squeeze())
+        gt_n = MuLawDecoding(256)(neg.squeeze())
+    os.makedirs(f"gen/{tag}/", exist_ok=True)
+    path = f"gen/{tag}/{str(epoch + 1).zfill(5)}_gt_a.wav"
+    sf.write(path, gt_a.cpu().numpy(), 16000)
+    path = f"gen/{tag}/{str(epoch + 1).zfill(5)}_gt_n.wav"
+    sf.write(path, gt_n.cpu().numpy(), 16000)
+    path = f"gen/{tag}/{str(epoch + 1).zfill(5)}_recons_a.wav"
+    sf.write(path, recons_a.cpu().numpy(), 16000)
+    path = f"gen/{tag}/{str(epoch + 1).zfill(5)}_recons_n.wav"
+    sf.write(path, recons_n.cpu().numpy(), 16000)
+    path = f"gen/{tag}/{str(epoch + 1).zfill(5)}_swap1.wav"
+    sf.write(path, swap1.cpu().numpy(), 16000)
+    path = f"gen/{tag}/{str(epoch + 1).zfill(5)}_swap2.wav"
+    sf.write(path, swap2.cpu().numpy(), 16000)
 
 
 def main(args):
