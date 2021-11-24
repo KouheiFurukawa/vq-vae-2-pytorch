@@ -10,17 +10,15 @@ from torchvision import datasets, transforms, utils
 
 from tqdm import tqdm
 
-from audio_data import AudioData
 from vqvae import VQVAE
 from scheduler import CycleScheduler
 import distributed as dist
+from audio_data import MelData
 import matplotlib.pyplot as plt
 import librosa.display
-from torchaudio.transforms import MuLawDecoding
-import soundfile as sf
 
 
-def train(epoch, loader, model, optimizer, scheduler, device):
+def train(epoch, loader, model, optimizer, scheduler, device, tag):
     if dist.is_primary():
         loader = tqdm(loader)
 
@@ -67,7 +65,7 @@ def train(epoch, loader, model, optimizer, scheduler, device):
                 )
             )
 
-            if i % 100 == 0:
+            if (epoch + 1) % 50 == 0:
                 model.eval()
 
                 sample = img[:sample_size]
@@ -75,24 +73,13 @@ def train(epoch, loader, model, optimizer, scheduler, device):
                 with torch.no_grad():
                     out, _ = model(sample)
 
-                sample = MuLawDecoding(256)(sample.view(-1))
-                out = MuLawDecoding(256)(out.view(-1))
-
-                path = f"sample/{str(epoch + 1).zfill(5)}_{str(i).zfill(5)}_sample.wav"
-                sf.write(path, sample.cpu().numpy(), 16000)
-                path = f"sample/{str(epoch + 1).zfill(5)}_{str(i).zfill(5)}_out.wav"
-                sf.write(path, out.cpu().numpy(), 16000)
-
-                plt.figure(figsize=(16, 6))
-                p = plt.subplot(2, 1, 1)
-                p.set_ylim(-0.5, 0.5)
-                librosa.display.waveplot(sample.cpu().numpy(), sr=16000)
-                p = plt.subplot(2, 1, 2)
-                p.set_ylim(-0.5, 0.5)
-                librosa.display.waveplot(out.cpu().numpy(), sr=16000)
-                plt.tight_layout()
-                path = f"sample/{str(epoch + 1).zfill(5)}_{str(i).zfill(5)}.png"
-                plt.savefig(path, format="png")
+                sample = sample.squeeze().cpu().numpy()
+                out = out.squeeze().cpu().numpy()
+                fig, ax = plt.subplots(nrows=2, ncols=1, sharex=True)
+                img = librosa.display.specshow(sample, y_axis='log', x_axis='time', sr=16000, ax=ax[0])
+                librosa.display.specshow(out, y_axis='log', sr=16000, hop_length=256, x_axis='time', ax=ax[1])
+                fig.colorbar(img, ax=ax, format="%+2.f dB")
+                plt.savefig(f"/groups/1/gcc50521/furukawa/vqvae2/sample/{tag}/{str(epoch + 1).zfill(5)}_{str(i).zfill(5)}.png", format="png")
                 plt.close()
 
                 model.train()
@@ -112,11 +99,13 @@ def main(args):
         ]
     )
 
-    dataset = AudioData('/groups/1/gcc50521/furukawa/maestro_npy_10sec')
+    dataset = MelData('/groups/1/gcc50521/furukawa/musicnet_npy_10sec')
     sampler = dist.data_sampler(dataset, shuffle=True, distributed=args.distributed)
     loader = DataLoader(
         dataset, batch_size=128, sampler=sampler, num_workers=2
     )
+    os.makedirs(f"/groups/1/gcc50521/furukawa/vqvae2/sample/{args.tag}/", exist_ok=True)
+    os.makedirs(f"/groups/1/gcc50521/furukawa/vqvae2/checkpoint/{args.tag}/", exist_ok=True)
 
     model = VQVAE().to(device)
 
@@ -139,10 +128,10 @@ def main(args):
         )
 
     for i in range(args.epoch):
-        train(i, loader, model, optimizer, scheduler, device)
+        train(i, loader, model, optimizer, scheduler, device, args.tag)
 
-        if dist.is_primary() and (i + 1) % 20 == 0:
-            torch.save(model.state_dict(), f"checkpoint/vqvae_{str(i + 1).zfill(3)}.pt")
+        if dist.is_primary() and (i + 1) % 50 == 0:
+            torch.save(model.state_dict(), f"/groups/1/gcc50521/furukawa/vqvae2/checkpoint/{args.tag}/vqvae_{str(i + 1).zfill(3)}.pt")
 
 
 if __name__ == "__main__":
@@ -161,6 +150,7 @@ if __name__ == "__main__":
     parser.add_argument("--lr", type=float, default=3e-4)
     parser.add_argument("--sched", type=str)
     parser.add_argument("--path", type=str)
+    parser.add_argument("tag", type=str)
 
     args = parser.parse_args()
 
