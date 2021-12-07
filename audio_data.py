@@ -5,6 +5,7 @@ from glob import glob
 import random
 import numpy as np
 from torchaudio.transforms import MuLawEncoding
+from musicnet_utils import musicnet_label
 
 sys.path.insert(0, 'tacotron2')
 from tacotron2.layers import TacotronSTFT
@@ -55,10 +56,11 @@ class MelData(torch.utils.data.Dataset):
 
     def __getitem__(self, idx):
         data = np.load(self.files[idx])
+        label = torch.tensor(musicnet_label(self.files[idx]))
         head1, head2 = random.sample(range(len(data) - self.stride), 2)
         data = data[head1:head1 + self.stride]
         data = torch.from_numpy(data).float()
-        return self.get_mel(data)
+        return self.get_mel(data), label
 
     def __len__(self):
         return len(self.files)

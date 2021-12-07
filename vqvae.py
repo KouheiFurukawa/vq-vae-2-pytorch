@@ -176,6 +176,7 @@ class VQVAE(nn.Module):
 
         self.enc_b = Encoder(in_channel, channel, n_res_block, n_res_channel, stride=4)
         self.enc_t = Encoder(channel, channel, n_res_block, n_res_channel, stride=2)
+        self.g_embed = torch.nn.Embedding(21, embed_dim)
         self.quantize_conv_t = nn.Conv1d(channel, embed_dim, 1)
         self.quantize_t = Quantize(embed_dim, n_embed)
         self.dec_t = Decoder(
@@ -185,7 +186,7 @@ class VQVAE(nn.Module):
         self.quantize_b = Quantize(embed_dim, n_embed)
         self.upsample_t = nn.ConvTranspose1d(embed_dim, embed_dim, 3, stride=2, padding=1, output_padding=1)
         self.dec = Decoder(
-            embed_dim + embed_dim,
+            embed_dim + embed_dim + embed_dim,
             in_channel,
             channel,
             n_res_block,
@@ -193,9 +194,9 @@ class VQVAE(nn.Module):
             stride=4,
         )
 
-    def forward(self, input):
+    def forward(self, input, label):
         quant_t, quant_b, diff, _, _ = self.encode(input)
-        dec = self.decode(quant_t, quant_b)
+        dec = self.decode(quant_t, quant_b, label)
 
         return dec, diff
 
@@ -218,9 +219,10 @@ class VQVAE(nn.Module):
 
         return quant_t, quant_b, diff_t + diff_b, id_t, id_b
 
-    def decode(self, quant_t, quant_b):
+    def decode(self, quant_t, quant_b, label):
         upsample_t = self.upsample_t(quant_t)
-        quant = torch.cat([upsample_t, quant_b], 1)
+        cond = self.g_embed(label).unsqueeze(-1).expand_as(upsample_t)
+        quant = torch.cat([upsample_t, quant_b, cond], 1)
         dec = self.dec(quant)
 
         return dec

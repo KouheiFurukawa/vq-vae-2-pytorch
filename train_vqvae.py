@@ -16,6 +16,7 @@ import distributed as dist
 from audio_data import MelData
 import matplotlib.pyplot as plt
 import librosa.display
+import numpy as np
 
 
 def train(epoch, loader, model, optimizer, scheduler, device, tag):
@@ -30,12 +31,13 @@ def train(epoch, loader, model, optimizer, scheduler, device, tag):
     mse_sum = 0
     mse_n = 0
 
-    for i, img in enumerate(loader):
+    for i, (img, label) in enumerate(loader):
         model.zero_grad()
 
         img = img.to(device)
+        label = label.to(device)
 
-        out, latent_loss = model(img)
+        out, latent_loss = model(img, label)
         recon_loss = criterion(out, img)
         latent_loss = latent_loss.mean()
         loss = recon_loss + latent_loss_weight * latent_loss
@@ -69,9 +71,10 @@ def train(epoch, loader, model, optimizer, scheduler, device, tag):
                 model.eval()
 
                 sample = img[:sample_size]
+                label = label[:sample_size]
 
                 with torch.no_grad():
-                    out, _ = model(sample)
+                    out, _ = model(sample, label)
 
                 sample = sample.squeeze().cpu().numpy()
                 out = out.squeeze().cpu().numpy()
@@ -79,10 +82,36 @@ def train(epoch, loader, model, optimizer, scheduler, device, tag):
                 img = librosa.display.specshow(sample, y_axis='log', x_axis='time', sr=16000, ax=ax[0])
                 librosa.display.specshow(out, y_axis='log', sr=16000, hop_length=256, x_axis='time', ax=ax[1])
                 fig.colorbar(img, ax=ax, format="%+2.f dB")
-                plt.savefig(f"/groups/1/gcc50521/furukawa/vqvae2/sample/{tag}/{str(epoch + 1).zfill(5)}_{str(i).zfill(5)}.png", format="png")
+                plt.savefig(
+                    f"{args.data_root}/vqvae2/sample/{tag}/{str(epoch + 1).zfill(5)}_{str(i).zfill(5)}.png",
+                    format="png")
                 plt.close()
 
                 model.train()
+
+
+def test(epoch, loader, model, optimizer, scheduler, device, tag):
+    model.eval()
+    sample_size = 1
+    img, label = loader.__iter__().next()
+    sample, label = img[:sample_size], torch.tensor(range(10))
+    sample = torch.cat([sample for _ in range(10)], dim=0)
+    sample = sample.to(device)
+    label = label.to(device)
+    with torch.no_grad():
+        out, _ = model(sample, label)
+    for i in range(10):
+        gt = sample[i].squeeze().cpu().numpy()
+        res = out[i].squeeze().cpu().numpy()
+        np.save(f"{args.data_root}/vqvae2/gen/{tag}/{str(epoch + 1).zfill(5)}_{str(i).zfill(5)}", res)
+        fig, ax = plt.subplots(nrows=2, ncols=1, sharex=True)
+        img = librosa.display.specshow(gt, y_axis='log', x_axis='time', sr=16000, ax=ax[0])
+        librosa.display.specshow(res, y_axis='log', sr=16000, hop_length=256, x_axis='time', ax=ax[1])
+        fig.colorbar(img, ax=ax, format="%+2.f dB")
+        plt.savefig(f"{args.data_root}/vqvae2/gen/{tag}/{str(epoch + 1).zfill(5)}_{str(i).zfill(5)}.png",
+                    format="png")
+        plt.close()
+    sys.exit()
 
 
 def main(args):
@@ -99,13 +128,13 @@ def main(args):
         ]
     )
 
-    dataset = MelData('/groups/1/gcc50521/furukawa/musicnet_npy_10sec')
+    dataset = MelData(f'{args.data_root}/musicnet_npy_10sec')
     sampler = dist.data_sampler(dataset, shuffle=True, distributed=args.distributed)
     loader = DataLoader(
-        dataset, batch_size=128, sampler=sampler, num_workers=2
+        dataset, batch_size=256, sampler=sampler, num_workers=2
     )
-    os.makedirs(f"/groups/1/gcc50521/furukawa/vqvae2/sample/{args.tag}/", exist_ok=True)
-    os.makedirs(f"/groups/1/gcc50521/furukawa/vqvae2/checkpoint/{args.tag}/", exist_ok=True)
+    os.makedirs(f"{args.data_root}/vqvae2/sample/{args.tag}/", exist_ok=True)
+    os.makedirs(f"{args.data_root}/vqvae2/checkpoint/{args.tag}/", exist_ok=True)
 
     model = VQVAE().to(device)
 
@@ -131,7 +160,8 @@ def main(args):
         train(i, loader, model, optimizer, scheduler, device, args.tag)
 
         if dist.is_primary() and (i + 1) % 50 == 0:
-            torch.save(model.state_dict(), f"/groups/1/gcc50521/furukawa/vqvae2/checkpoint/{args.tag}/vqvae_{str(i + 1).zfill(3)}.pt")
+            torch.save(model.state_dict(),
+                       f"{args.data_root}/vqvae2/checkpoint/{args.tag}/vqvae_{str(i + 1).zfill(3)}.pt")
 
 
 if __name__ == "__main__":
@@ -153,6 +183,7 @@ if __name__ == "__main__":
     parser.add_argument("tag", type=str)
 
     args = parser.parse_args()
+    args.data_root = '/data/uni0/users/furukawa'
 
     print(args)
 
